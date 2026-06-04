@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
-use App\Entity\Role;
 use App\Entity\User;
 use App\Exception\ApiException;
 use App\Repository\UserRepository;
+use App\Security\UserVoter;
 use App\Service\Contract\UserServiceInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -38,7 +38,7 @@ class UserController extends AbstractController
             return new JsonResponse(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->checkUserAccess($user);
+        $this->denyAccessUnlessGranted(UserVoter::VIEW, $user);
 
         $normalizedData = $this->serializer->normalize($user, null, ['groups' => 'get']);
 
@@ -58,7 +58,7 @@ class UserController extends AbstractController
 
         $user = $this->userRepository->findOneBy(['login' => $currentUser->getLogin(), 'pass' => $currentUser->getPass()]);
 
-        $this->checkUserAccess($user);
+        $this->denyAccessUnlessGranted(UserVoter::CREATE, $user);
 
         $user = new User();
         $user->setLogin($data['login'] ?? '');
@@ -85,7 +85,7 @@ class UserController extends AbstractController
             return new JsonResponse(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->checkUserAccess($user);
+        $this->denyAccessUnlessGranted(UserVoter::EDIT, $user);
 
         $data = json_decode($request->getContent(), true) ?? [];
 
@@ -117,10 +117,7 @@ class UserController extends AbstractController
             return new JsonResponse(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
         }
 
-        // Only root can delete
-        if (!$this->isGranted(Role::ROLE_ROOT)) {
-            return new JsonResponse(['error' => 'Forbidden'], Response::HTTP_FORBIDDEN);
-        }
+        $this->denyAccessUnlessGranted(UserVoter::DELETE, $user);
 
         $this->userService->delete($user);
 
@@ -173,19 +170,6 @@ class UserController extends AbstractController
                 'All required fields must be passed.', Response::HTTP_BAD_REQUEST,
                 ['missing_fields' => $missingFields]
             );
-        }
-    }
-
-    private function checkUserAccess(User $requestedUser): void
-    {
-        $current = $this->getUser();
-
-        if (!$current instanceof User) {
-            throw new ApiException('Unauthorized', Response::HTTP_UNAUTHORIZED);
-        }
-
-        if (!$this->isGranted('ROLE_ROOT') && $current->getId() !== $requestedUser->getId()) {
-            throw new ApiException('Forbidden', Response::HTTP_FORBIDDEN);
         }
     }
 }
