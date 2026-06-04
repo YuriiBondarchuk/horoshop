@@ -1,0 +1,3 @@
+api_users:
+    resource: '../../src/Controller/Api'
+    type: attribute
