@@ -4,117 +4,71 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
-use App\Entity\User;
-use App\Exception\ApiException;
-use App\Repository\UserRepository;
+use App\Dto\CreateUserDto;
+use App\Dto\LoginDto;
+use App\Dto\UpdateUserDto;
 use App\Security\UserVoter;
 use App\Service\Contract\UserServiceInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Serializer\SerializerInterface;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Annotation\Route;
+use Symfony\Component\Validator\Validator\ValidatorInterface;
 
 #[Route('/v1/api/users')]
 class UserController extends AbstractController
 {
     public function __construct(
         private readonly UserServiceInterface $userService,
-        private readonly SerializerInterface $serializer,
         private readonly JWTTokenManagerInterface $jwtManager,
-        private readonly UserRepository $userRepository
+        private readonly ValidatorInterface $validator
     ) {
     }
 
     #[Route('/{id}', name: 'users_get', methods: ['GET'])]
     public function get(string $id): JsonResponse
     {
-        $this->denyAccessUnlessGranted('IS_AUTHENTICATED_FULLY');
-
         $user = $this->userService->find((int)$id);
         if (!$user) {
-            return new JsonResponse(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
+            return $this->json(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
         }
 
         $this->denyAccessUnlessGranted(UserVoter::VIEW, $user);
 
-        $normalizedData = $this->serializer->normalize($user, null, ['groups' => 'get']);
-
-        return new JsonResponse($normalizedData, Response::HTTP_OK);
+        return $this->json($user, Response::HTTP_OK, [], ['groups' => 'get']);
     }
 
     #[Route('', name: 'users_post', methods: ['POST'])]
-    public function post(Request $request): JsonResponse
+    public function post(#[MapRequestPayload] CreateUserDto $dto): JsonResponse
     {
-        $this->denyAccessUnlessGranted('IS_AUTHENTICATED_FULLY');
+        $this->denyAccessUnlessGranted(UserVoter::CREATE, null);
 
-        $data = json_decode($request->getContent(), true) ?? [];
+        $user = $this->userService->createFromDto($dto);
 
-        $this->validateRequiredFields($data, ['login', 'phone', 'pass']);
-
-        $currentUser = $this->getUser();
-
-        $user = $this->userRepository->findOneBy(['login' => $currentUser->getLogin(), 'pass' => $currentUser->getPass()]);
-
-        $this->denyAccessUnlessGranted(UserVoter::CREATE, $user);
-
-        $user = new User();
-        $user->setLogin($data['login'] ?? '');
-        $user->setPhone($data['phone'] ?? '');
-        $user->setPass($data['pass']);
-
-        try {
-            $this->userService->create($user);
-        } catch (ApiException $e) {
-            return new JsonResponse(['error' => $e->getMessage(), 'details' => $e->getDetails()],
-                $e->getCode() ?: Response::HTTP_BAD_REQUEST);
-        }
-
-        return new JsonResponse($this->normalizeData($user, 'post'), Response::HTTP_CREATED);
+        return $this->json($user, Response::HTTP_CREATED, [], ['groups' => 'post']);
     }
 
     #[Route('/{id}', name: 'users_put', methods: ['PUT'])]
-    public function put(int $id, Request $request): JsonResponse
+    public function put(#[MapRequestPayload()] UpdateUserDto $dto): JsonResponse
     {
-        $this->denyAccessUnlessGranted('IS_AUTHENTICATED_FULLY');
-
-        $user = $this->userService->find($id);
+        $user = $this->userService->updateFromDto($dto);
         if (!$user) {
-            return new JsonResponse(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
+            return $this->json(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
         }
 
         $this->denyAccessUnlessGranted(UserVoter::EDIT, $user);
 
-        $data = json_decode($request->getContent(), true) ?? [];
-
-        $this->validateRequiredFields($data, ['login', 'phone', 'pass', 'id']);
-
-        $user->setLogin((string)$data['login']);
-        $user->setPhone((string)$data['phone']);
-        $user->setPass((string)$data['pass']);
-
-        try {
-            $this->userService->update($user);
-        } catch (ApiException $e) {
-            return new JsonResponse(
-                ['error' => $e->getMessage(), 'details' => $e->getDetails()],
-                $e->getCode() ?: Response::HTTP_BAD_REQUEST
-            );
-        }
-
-        return new JsonResponse($this->normalizeData($user, 'put'), Response::HTTP_OK);
+        return $this->json($user, Response::HTTP_OK, [], ['groups' => 'put']);
     }
 
     #[Route('/{id}', name: 'users_delete', methods: ['DELETE'])]
     public function delete(int $id): JsonResponse
     {
-        $this->denyAccessUnlessGranted('IS_AUTHENTICATED_FULLY');
-
         $user = $this->userService->find($id);
         if (!$user) {
-            return new JsonResponse(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
+            return $this->json(['error' => 'Not found'], Response::HTTP_NOT_FOUND);
         }
 
         $this->denyAccessUnlessGranted(UserVoter::DELETE, $user);
@@ -125,19 +79,16 @@ class UserController extends AbstractController
     }
 
     #[Route('/login', name: 'users_login', methods: ['POST'])]
-    public function login(Request $request): JsonResponse
+    public function login(#[MapRequestPayload] LoginDto $dto): JsonResponse
     {
-        $data = json_decode($request->getContent(), true, 512, JSON_THROW_ON_ERROR) ?? [];
-        $login = $data['login'] ?? null;
-        $pass = $data['pass'] ?? null;
-
-        if (!$login || !$pass) {
-            return new JsonResponse(['error' => 'login and pass required'], Response::HTTP_BAD_REQUEST);
+        $errors = $this->validator->validate($dto);
+        if (count($errors) > 0) {
+            return $this->json($errors, Response::HTTP_BAD_REQUEST);
         }
 
-        $user = $this->userRepository->findOneBy(['login' => $login]);
-        if (!$user || $pass !== $user->getPassword()) {
-            return new JsonResponse(['error' => 'Invalid credentials'], Response::HTTP_UNAUTHORIZED);
+        $user = $this->userService->findByLogin($dto->login);
+        if (!$user) {
+            return $this->json(['error' => 'Invalid credentials'], Response::HTTP_UNAUTHORIZED);
         }
 
         $payload = [
@@ -147,29 +98,6 @@ class UserController extends AbstractController
 
         $token = $this->jwtManager->createFromPayload($user, $payload);
 
-        return new JsonResponse(['token' => $token], Response::HTTP_OK);
-    }
-
-    private function normalizeData(User $user, string $normalizeGroup): array
-    {
-        return $this->serializer->normalize($user, null, ['groups' => $normalizeGroup]);
-    }
-
-    private function validateRequiredFields(array $data, array $requiredFields): void
-    {
-        $missingFields = [];
-
-        foreach ($requiredFields as $field) {
-            if (!isset($data[$field]) || (is_string($data[$field]) && trim($data[$field]) === '')) {
-                $missingFields[] = $field;
-            }
-        }
-
-        if (!empty($missingFields)) {
-            throw new ApiException(
-                'All required fields must be passed.', Response::HTTP_BAD_REQUEST,
-                ['missing_fields' => $missingFields]
-            );
-        }
+        return $this->json(['token' => $token], Response::HTTP_OK);
     }
 }

@@ -4,71 +4,62 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Dto\CreateUserDto;
+use App\Dto\UpdateUserDto;
 use App\Entity\User;
 use App\Repository\UserRepository;
 use App\Service\Contract\UserServiceInterface;
 use Doctrine\ORM\EntityManagerInterface;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
-use App\Exception\ApiException;
 
-class UserService implements UserServiceInterface
+readonly class UserService implements UserServiceInterface
 {
     public function __construct(
-        private UserRepository $repo,
-        private EntityManagerInterface $em,
-        private ValidatorInterface $validator
+        private UserRepository $repository,
+        private EntityManagerInterface $manager,
     ) {}
-
-    public function create(User $user): User
-    {
-        $errors = $this->validator->validate($user);
-        if (count($errors) > 0) {
-            $messages = [];
-            foreach ($errors as $e) { $messages[] = $e->getPropertyPath().': '.$e->getMessage(); }
-            throw new ApiException('Validation failed', 400, $messages);
-        }
-
-        $this->em->persist($user);
-        try {
-            $this->em->flush();
-        } catch (\Doctrine\DBAL\Exception\UniqueConstraintViolationException $e) {
-            throw new ApiException('Duplicate login+pass', 409);
-        }
-
-        return $user;
-    }
-
-    public function update(User $user): User
-    {
-        $errors = $this->validator->validate($user);
-        if (count($errors) > 0) {
-            $messages = [];
-            foreach ($errors as $e) { $messages[] = $e->getPropertyPath().': '.$e->getMessage(); }
-            throw new ApiException('Validation failed', 400, $messages);
-        }
-
-        try {
-            $this->em->flush();
-        } catch (\Doctrine\DBAL\Exception\UniqueConstraintViolationException $e) {
-            throw new ApiException('Duplicate login+pass', 409);
-        }
-
-        return $user;
-    }
 
     public function delete(User $user): void
     {
-        $this->em->remove($user);
-        $this->em->flush();
+        $this->manager->remove($user);
+        $this->manager->flush();
     }
 
     public function find(int $id): ?User
     {
-        return $this->repo->find($id);
+        return $this->repository->find($id);
     }
 
-    public function findAll(): array
+    public function findByLogin(string $login): ?User
     {
-        return $this->repo->findAll();
+        return $this->repository->findByLogin($login);
+    }
+
+    public function createFromDto(CreateUserDto $dto): User
+    {
+        $user = new User();
+        $user->setLogin($dto->login);
+        $user->setPhone($dto->phone);
+        $user->setPass(password_hash($dto->pass, PASSWORD_ARGON2ID));
+
+        $this->manager->persist($user);
+        $this->manager->flush();
+
+        return $user;
+    }
+
+    public function updateFromDto(UpdateUserDto $dto): ?User
+    {
+        $user = $this->repository->find($dto->id);
+        if (!$user) {
+            return null;
+        }
+
+        $user->setLogin($dto->login);
+        $user->setPhone($dto->phone);
+        $user->setPass(password_hash($dto->pass, PASSWORD_ARGON2ID));
+
+        $this->manager->flush();
+
+        return $user;
     }
 }
